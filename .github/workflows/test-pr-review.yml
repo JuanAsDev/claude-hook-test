@@ -1,0 +1,57 @@
+name: Test PR Review (hook-execution probe — Target 1 only)
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to review'
+        required: true
+        type: number
+
+jobs:
+  pr-review:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+    steps:
+      - name: Set PR number
+        id: pr-number
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "number=${{ inputs.pr_number }}" >> $GITHUB_OUTPUT
+          else
+            echo "number=${{ github.event.pull_request.number }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/pull/{0}/head', inputs.pr_number) || '' }}
+
+      - name: Record checked-out SHA (observational — untuk triangulasi atribusi)
+        run: |
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+          git log -1 --format='%H %s'
+
+      - name: Run Claude PR Review
+        uses: anthropics/claude-code-action@bbfaf8e1ffe3e688f7ab65ceee78de241e24a238 # v1.0.132 — pin sama persis
+        with:
+          anthropic_api_key: "sk-ant-dummy-canary-not-real-00000000000000000000000000"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            /review-pr-ci ${{ steps.pr-number.outputs.number }}
+          claude_args: |
+            --allowedTools "SlashCommand,Task,Bash(gh pr diff:*),Bash(gh pr view:*),Bash(gh pr review:*),Bash(git diff:*),Bash(git log:*),Read,Glob,Grep"
+        env:
+          PR_NUMBER: ${{ steps.pr-number.outputs.number }}
+
+      - name: Show hook marker (observational, log-only)
+        if: always()
+        run: |
+          if [ -f HOOK_FIRED_MARKER.txt ]; then echo "=== MARKER_FOUND ==="; cat HOOK_FIRED_MARKER.txt; else echo "=== MARKER_NOT_FOUND ==="; fi
